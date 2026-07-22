@@ -1,41 +1,38 @@
-# Разворачивание на сервере
+# Развёртывание
 
-Проверено на Ubuntu 24.04, Python 3.12.
+Проверено на Ubuntu 24.04 с Docker 29 и Compose v5.
 
-## Первая установка
+## Установка
 
 ```bash
-sudo apt-get install -y python3-venv rsync    # PEP 668 запрещает ставить пакеты в системный python
-mkdir -p /home/<user>/olx-monitor
+mkdir -p /home/<user>/olx-monitor && cd /home/<user>/olx-monitor
 ```
 
 С рабочей машины:
 
 ```bash
 rsync -av --delete \
-  --exclude .venv --exclude data --exclude .git --exclude __pycache__ \
+  --exclude .venv --exclude .git --exclude data/db --exclude __pycache__ \
   ./ <user>@СЕРВЕР:/home/<user>/olx-monitor/
-scp .env proxies.txt <user>@СЕРВЕР:/home/<user>/olx-monitor/
+scp .env <user>@СЕРВЕР:/home/<user>/olx-monitor/
 ```
 
 На сервере:
 
 ```bash
-cd /home/<user>/olx-monitor
-python3 -m venv .venv
-.venv/bin/pip install -e .
-mkdir -p data
+mkdir -p data/db data/exports
+# Процесс в контейнере работает под uid 1000, а не под root. Без выравнивания
+# владельца SQLite получит "attempt to write a readonly database".
+sudo chown -R 1000:1000 data/db data/exports
 
-sudo cp deploy/olx-monitor.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now olx-monitor
+docker compose up -d --build
 ```
 
 ## Проверка
 
 ```bash
-systemctl status olx-monitor
-journalctl -u olx-monitor -f
+docker compose ps
+docker compose logs -f
 ```
 
 В Telegram бот должен отвечать на `/status`.
@@ -43,30 +40,37 @@ journalctl -u olx-monitor -f
 ## Обновление
 
 ```bash
-rsync -av --delete --exclude .venv --exclude data --exclude .git \
+rsync -av --delete --exclude .venv --exclude .git --exclude data/db \
   ./ <user>@СЕРВЕР:/home/<user>/olx-monitor/
-ssh <user>@СЕРВЕР 'cd /home/<user>/olx-monitor && .venv/bin/pip install -e . -q && sudo systemctl restart olx-monitor'
+ssh <user>@СЕРВЕР 'cd /home/<user>/olx-monitor && docker compose up -d --build'
 ```
+
+Пересборка проходит смоук-тест на этапе сборки: если справочники не доехали или
+зависимости побились, образ не соберётся и старый контейнер продолжит работать.
 
 ## Что где лежит
 
 | Путь | Что |
 |---|---|
-| `/home/<user>/olx-monitor/.env` | секреты; в репозиторий не попадает |
-| `/home/<user>/olx-monitor/data/olx.db` | база: запросы, объявления, история цен |
-| `journalctl -u olx-monitor` | логи |
+| `.env` | секреты, подключаются через `env_file`, в образ не попадают |
+| `data/db/olx.db` | база: запросы, объявления, история цен |
+| `data/exports/` | выгрузки CSV/JSON |
+| `docker compose logs` | логи, ротация 10 МБ × 5 файлов |
+
+Справочники разделов и городов лежат **внутри образа** — они часть сборки,
+а не пользовательские данные. Обновляются пересборкой после
+`scripts/refresh_categories.py` и `scripts/refresh_cities.py`.
 
 ## Важное
 
-**База данных живёт в `data/` и не переносится с рабочей машины.** В ней накопленная
-история показов: если подложить чужую или удалить — монитор заново засеет выдачу
-и замолчит до следующего действительно нового объявления.
-
-**`ProtectHome=read-only` в юните — не украшение.** Процесс ходит в сеть по
-недокументированному чужому API; ограничение записи всем, кроме `data/`, стоит
-одной строки и снимает целый класс последствий, если что-то пойдёт не так.
+**База не переносится с рабочей машины.** В ней история показов: подложить чужую
+или удалить — монитор заново засеет выдачу и замолчит до следующего действительно
+нового объявления.
 
 **Один процесс на один токен бота.** Telegram отдаёт обновления только одному
-получателю: если бот параллельно запущен на рабочей машине, сервер и она будут
-перехватывать команды друг у друга через раз. Перед запуском на сервере локальный
-процесс надо остановить.
+получателю: если бот параллельно запущен локально, сервер и рабочая машина будут
+перехватывать команды друг у друга через раз.
+
+**Живучесть держится на `restart: unless-stopped` и автозапуске самого Docker.**
+Systemd-юнит (`olx-monitor.service`) остался в репозитории как альтернатива для
+установки без Docker — но включать оба сразу нельзя, получите два процесса на один токен.
