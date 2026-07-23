@@ -124,3 +124,12 @@ def test_caption_escapes_html_in_title():
     caption = notify._caption(listing, _watch(), reason="new")
     assert "<script>" not in caption
     assert "&lt;script&gt;" in caption
+
+
+def test_caption_converts_olx_html_description_to_plain_text():
+    listing = _listing(description="Перший рядок<br />\n<br />\nДругий &amp; <b>важливий</b> рядок")
+
+    caption = notify._caption(listing, _watch(), reason="new")
+
+    assert "Перший рядок\n\nДругий &amp; важливий рядок" in caption
+    assert "&lt;br" not in caption

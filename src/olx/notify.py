@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import html
+import re
+from html.parser import HTMLParser
 from typing import Literal
 
 import httpx
@@ -16,6 +18,23 @@ REQUEST_TIMEOUT = 30.0
 # Подпись под фото в Telegram ограничена 1024 символами, и превышение -- это отказ
 # всего sendPhoto, а не обрезка. Остальное в подписи занимает ~250, берём запас.
 DESCRIPTION_LIMIT = 600
+
+_BR_TAG = re.compile(r"<br\s*/?>\s*", re.IGNORECASE)
+
+
+class _DescriptionTextParser(HTMLParser):
+    """Извлекает текст из HTML, который возвращает OLX в description."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._parts: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        self._parts.append(data)
+
+    @property
+    def text(self) -> str:
+        return "".join(self._parts)
 
 
 class NotifyError(OlxError):
@@ -35,7 +54,19 @@ def _price_line(listing: Listing) -> str:
 
 
 def _short_description(text: str) -> str:
-    text = " ".join(text.split())
+    # API OLX возвращает description как HTML: чаще всего <br />, иногда также
+    # сущности и другие теги. Telegram не поддерживает <br>, а экранирование
+    # без предварительной очистки показывает этот тег в сообщении буквально.
+    # Сначала превращаем переносы в \n, затем оставляем только текст и лишь
+    # после этого экранируем результат при сборке HTML-подписи.
+    text = _BR_TAG.sub("\n", text)
+    parser = _DescriptionTextParser()
+    parser.feed(text)
+    parser.close()
+    text = parser.text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[^\S\n]+", " ", text)
+    text = re.sub(r" *\n *", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
     if len(text) <= DESCRIPTION_LIMIT:
         return text
     cut = text[:DESCRIPTION_LIMIT]
