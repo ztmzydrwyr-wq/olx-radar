@@ -14,7 +14,7 @@ from olx.errors import BlockedError, SchemaError, StorageError, TransportError
 from olx.models import Listing, NotifyMode, PollMode, Watch
 from olx.parse import apply_stop_words, matches_filters, parse_listing
 
-Reason = Literal["new", "pushup"]
+Reason = Literal["new", "pushup", "discovered"]
 
 NOTIFY_DELAY_SECONDS = 1.0
 TRANSPORT_ALERT_AFTER = 3
@@ -37,7 +37,10 @@ def select_new_from(
 
     for listing in listings:
         if listing.id not in seen:
-            finds.append(Find(listing, "new"))
+            # Старая карточка может появиться в выдаче не сразу из-за ранжирования
+            # OLX. Это не новое объявление, а первое появление в этой выдаче.
+            is_new = watch.created_at is None or listing.created_at >= watch.created_at
+            finds.append(Find(listing, "new" if is_new else "discovered"))
             continue
 
         if watch.notify_mode is not NotifyMode.NEW_PUSHUP:
@@ -72,6 +75,7 @@ class Poller:
         self.failures = 0
         self.transport_failures = 0
         self.silence_alerted = False
+        self.last_purge: datetime | None = None
 
     @property
     def proxy(self) -> str | None:
@@ -305,6 +309,27 @@ async def check_silence(poller: Poller, *, now: datetime | None = None) -> bool:
     return True
 
 
+async def maybe_purge(poller: Poller, *, now: datetime | None = None) -> bool:
+    now = now or datetime.now(UTC)
+    if poller.last_purge is not None and now - poller.last_purge < timedelta(days=1):
+        return False
+    try:
+        result = await asyncio.to_thread(
+            storage.purge_old_history, retention_days=settings.history_retention_days, now=now
+        )
+    except StorageError as e:
+        logger.error("Очистка истории не удалась: {}", e)
+        return False
+    poller.last_purge = now
+    if result["listings"] or result["snapshots"]:
+        logger.info(
+            "Очистка истории: удалено объявлений {}, снимков цен {}",
+            result["listings"],
+            result["snapshots"],
+        )
+    return True
+
+
 async def run_forever() -> None:
     storage.init_db(settings.db_path)
     poller = Poller()
@@ -316,6 +341,7 @@ async def run_forever() -> None:
     while True:
         await _cycle(poller)
         await check_silence(poller)
+        await maybe_purge(poller)
         # Спим до ближайшего срока, а не фиксированный интервал: иначе полный режим
         # опрашивался бы с частотой быстрого -- до 10 обращений каждые 25 с (R-1).
         try:

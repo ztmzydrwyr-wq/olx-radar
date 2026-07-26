@@ -44,6 +44,24 @@ def test_unseen_listing_is_new_in_both_modes():
         assert [(f.listing.id, f.reason) for f in finds] == [(100, "new")]
 
 
+def test_old_listing_new_to_us_is_discovered_not_new():
+    # Ровно жалоба владельца: айфон, созданный задолго до запроса, впервые попал
+    # в выдачу. Он не «новый», он «впервые в выдаче» -- маркер должен это отражать.
+    watch = Watch(
+        id=1,
+        query="iphone 13",
+        filters=Filters(),
+        notify_mode=NotifyMode.NEW,
+        created_at=T0,
+    )
+    old = _listing(100, created=T0 - timedelta(days=130))
+    fresh = _listing(200, created=T0 + timedelta(hours=1))
+
+    finds = select_new_from(watch, [old, fresh], seen=set(), last_pushups={})
+    by_id = {f.listing.id: f.reason for f in finds}
+    assert by_id == {100: "discovered", 200: "new"}
+
+
 def test_seen_listing_is_silent_without_pushup():
     listings = [_listing(100, pushed=T0)]
     finds = select_new_from(

@@ -1,5 +1,5 @@
 ﻿import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -7,6 +7,8 @@ import pytest
 from olx import notify
 from olx.config import settings
 from olx.models import Filters, Listing, NotifyMode, PollMode, Watch
+
+FIXED_NOW = datetime(2026, 7, 26, 12, 0, tzinfo=UTC)
 
 # Ссылка собрана по реальному шаблону CDN (контракты, п.1.2), но id файла
 # заведомо несуществующий -- Telegram не сможет её скачать. Это не гипотетический
@@ -133,3 +135,120 @@ def test_caption_converts_olx_html_description_to_plain_text():
 
     assert "Перший рядок\n\nДругий &amp; важливий рядок" in caption
     assert "&lt;br" not in caption
+
+
+def test_age_humanizes():
+    assert notify._age(FIXED_NOW - timedelta(seconds=10), now=FIXED_NOW) == "только что"
+    assert notify._age(FIXED_NOW - timedelta(minutes=5), now=FIXED_NOW) == "5 мин назад"
+    assert notify._age(FIXED_NOW - timedelta(hours=3), now=FIXED_NOW) == "3 ч назад"
+    assert notify._age(FIXED_NOW - timedelta(days=5), now=FIXED_NOW) == "5 дн назад"
+    assert notify._age(FIXED_NOW - timedelta(days=200), now=FIXED_NOW) == "6 мес назад"
+
+
+def test_when_lines_new_is_single_recent_line():
+    lst = _listing(created_at=FIXED_NOW - timedelta(hours=2))
+    lines = notify._when_lines(lst, "new", now=FIXED_NOW)
+    assert len(lines) == 1
+    assert "2 ч назад" in lines[0]
+    # у нового префикс "опубликовано" не нужен -- дата и так свежая
+    assert "опубликовано" not in lines[0]
+
+
+def test_when_lines_discovered_labels_old_publish_date_and_resurface():
+    # Ровно случай владельца: айфон, созданный 130 дней назад, всплывший сегодня.
+    lst = _listing(
+        created_at=FIXED_NOW - timedelta(days=130),
+        refreshed_at=FIXED_NOW - timedelta(hours=6),
+        pushed_at=None,
+    )
+    lines = notify._when_lines(lst, "discovered", now=FIXED_NOW)
+    assert any("опубликовано" in ln and "4 мес назад" in ln for ln in lines)
+    assert any("снова в выдаче" in ln for ln in lines)
+
+
+def test_when_lines_pushup_shows_pushup_moment():
+    lst = _listing(
+        created_at=FIXED_NOW - timedelta(days=130),
+        pushed_at=FIXED_NOW - timedelta(hours=1),
+    )
+    lines = notify._when_lines(lst, "pushup", now=FIXED_NOW)
+    assert any("опубликовано" in ln for ln in lines)
+    assert any("поднято" in ln and "1 ч назад" in ln for ln in lines)
+
+
+def test_caption_discovered_marks_and_explains_old_date():
+    lst = _listing(
+        created_at=datetime.now(UTC) - timedelta(days=130),
+        refreshed_at=datetime.now(UTC) - timedelta(hours=3),
+    )
+    caption = notify._caption(lst, _watch(), reason="discovered")
+    assert "Впервые в выдаче" in caption
+    assert "опубликовано" in caption
+    assert "снова в выдаче" in caption
+
+
+def _capture(monkeypatch):
+    seq: list = []
+
+    async def fake_group(client, chat_id, urls, caption):
+        seq.append(("group", tuple(urls), caption is not None))
+        return True
+
+    async def fake_photo(client, chat_id, url, caption=None):
+        seq.append(("photo", url, caption is not None))
+        return True
+
+    async def fake_msg(client, chat_id, text):
+        seq.append(("msg", text))
+
+    monkeypatch.setattr(notify, "_send_media_group", fake_group)
+    monkeypatch.setattr(notify, "_send_photo", fake_photo)
+    monkeypatch.setattr(notify, "_send_message", fake_msg)
+    return seq
+
+
+async def test_multiple_photos_go_as_one_media_group(monkeypatch):
+    seq = _capture(monkeypatch)
+    lst = _listing(photo_urls=("u1", "u2", "u3"), photo_url="u1")
+    await notify.send_listing(lst, _watch(), reason="new")
+    assert [c[0] for c in seq] == ["group"]
+    assert seq[0][1] == ("u1", "u2", "u3")
+    assert seq[0][2] is True
+
+
+async def test_media_group_splits_over_ten_photos(monkeypatch):
+    seq = _capture(monkeypatch)
+    urls = tuple(f"u{i}" for i in range(13))
+    lst = _listing(photo_urls=urls, photo_url=urls[0])
+    await notify.send_listing(lst, _watch(), reason="new")
+    groups = [c for c in seq if c[0] == "group"]
+    assert [len(g[1]) for g in groups] == [10, 3]
+    # подпись только на первом альбоме, иначе Telegram покажет её дважды
+    assert groups[0][2] is True
+    assert groups[1][2] is False
+
+
+async def test_media_group_falls_back_to_individual_photos(monkeypatch):
+    seq: list = []
+
+    async def failing_group(client, chat_id, urls, caption):
+        seq.append("group")
+        return False
+
+    async def fake_photo(client, chat_id, url, caption=None):
+        seq.append(("photo", caption is not None))
+        return True
+
+    async def fake_msg(client, chat_id, text):
+        seq.append("msg")
+
+    monkeypatch.setattr(notify, "_send_media_group", failing_group)
+    monkeypatch.setattr(notify, "_send_photo", fake_photo)
+    monkeypatch.setattr(notify, "_send_message", fake_msg)
+
+    lst = _listing(photo_urls=("u1", "u2"), photo_url="u1")
+    await notify.send_listing(lst, _watch(), reason="new")
+
+    assert "group" in seq
+    assert ("photo", True) in seq  # подпись доехала на первом фото
+    assert "msg" not in seq  # до текстового фоллбэка дойти не должно

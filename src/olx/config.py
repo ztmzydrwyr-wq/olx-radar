@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     poll_interval_full: int = 600
     full_max_pages: int = 10
     silence_alert_hours: int = 12
+    history_retention_days: int = 30
 
     proxy_enabled: bool = False
     proxy_list_file: Path = Path("proxies.txt")
@@ -52,6 +53,13 @@ class Settings(BaseSettings):
                 f"poll_interval_fast={v} меньше {MIN_POLL_INTERVAL} с. "
                 "Более частый опрос не даёт выигрыша в скорости — см. FINDINGS.md, S-07."
             )
+        return v
+
+    @field_validator("history_retention_days")
+    @classmethod
+    def _positive_retention(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("history_retention_days должен быть не меньше 1")
         return v
 
 

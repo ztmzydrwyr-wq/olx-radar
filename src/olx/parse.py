@@ -19,11 +19,12 @@ def _param(params: list[dict[str, Any]], key: str) -> dict[str, Any] | None:
     return None
 
 
-def _photo_url(photos: list[dict[str, Any]]) -> str | None:
-    if not photos:
-        return None
+def _photo_urls(photos: list[dict[str, Any]]) -> tuple[str, ...]:
     # link -- шаблон вида ".../image;s={width}x{height}", а не готовый URL.
-    return photos[0]["link"].replace("{width}", PHOTO_WIDTH).replace("{height}", PHOTO_HEIGHT)
+    return tuple(
+        photo["link"].replace("{width}", PHOTO_WIDTH).replace("{height}", PHOTO_HEIGHT)
+        for photo in photos
+    )
 
 
 def _parse_time(raw: dict[str, Any], field: str) -> datetime | None:
@@ -52,6 +53,8 @@ def parse_listing(raw: dict) -> Listing:
 
         location = raw["location"]
 
+        photo_urls = _photo_urls(raw.get("photos") or [])
+
         return Listing(
             id=raw["id"],
             url=raw["url"],
@@ -70,12 +73,13 @@ def parse_listing(raw: dict) -> Listing:
             created_at=datetime.fromisoformat(raw["created_time"]),
             pushed_at=_parse_time(raw, "pushup_time"),
             refreshed_at=_parse_time(raw, "last_refresh_time"),
-            photo_url=_photo_url(raw.get("photos") or []),
+            photo_url=photo_urls[0] if photo_urls else None,
             category_id=raw["category"]["id"],
             seller_id=raw["user"]["id"],
             # user.seller_type пустой у всех объявлений на этом эндпоинте (S-01+02) --
             # тип продавца в Listing берётся из business, сюда идёт только имя.
             seller_name=raw["user"]["name"],
+            photo_urls=photo_urls,
         )
     except (KeyError, TypeError, ValueError) as e:
         listing_id = raw.get("id", "?") if isinstance(raw, dict) else "?"

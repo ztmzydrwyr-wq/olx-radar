@@ -5,7 +5,7 @@ import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
@@ -437,3 +437,49 @@ def export(fmt: Literal["csv", "json"], watch_id: int | None = None) -> Path:
     else:
         _write_json(path, rows)
     return path
+
+
+def purge_old_history(*, retention_days: int, now: datetime | None = None) -> dict[str, int]:
+    """Убирает то, что уже не нужно хранить, и возвращает счётчики удалённого.
+
+    Объявление считается ушедшим с OLX, если его не было в выдаче дольше retention:
+    watch_seen.notified_at обновляется на КАЖДОМ опросе (mark_seen для всех, кого
+    видим), так что максимум по нему -- это «когда видели в последний раз». Такое
+    объявление и его снимки цен удаляем целиком; если оно вернётся через месяц,
+    повторное уведомление оправдано -- это уже новое событие.
+
+    У ещё живых объявлений подчищаем снимки цен старше retention, но последний на
+    объявление оставляем всегда: по нему record_price ловит изменение цены.
+    """
+    now = now or datetime.now(UTC)
+    cutoff = (now - timedelta(days=retention_days)).isoformat()
+    with _connection() as conn:
+        stale = [
+            row["id"]
+            for row in conn.execute(
+                """
+                SELECT l.id FROM listings l
+                WHERE (SELECT MAX(ws.notified_at) FROM watch_seen ws
+                       WHERE ws.listing_id = l.id) < ?
+                """,
+                (cutoff,),
+            ).fetchall()
+        ]
+        # Порядок из-за foreign_keys=ON: сначала зависимые строки, потом сами listings.
+        params = [(listing_id,) for listing_id in stale]
+        conn.executemany("DELETE FROM price_snapshots WHERE listing_id = ?", params)
+        conn.executemany("DELETE FROM watch_seen WHERE listing_id = ?", params)
+        conn.executemany("DELETE FROM listings WHERE id = ?", params)
+
+        # id автоинкрементный и растёт вместе с seen_at, поэтому MAX(id) на объявление
+        # -- это его самый свежий снимок.
+        pruned = conn.execute(
+            """
+            DELETE FROM price_snapshots
+            WHERE seen_at < ?
+              AND id NOT IN (SELECT MAX(id) FROM price_snapshots GROUP BY listing_id)
+            """,
+            (cutoff,),
+        ).rowcount
+        conn.commit()
+    return {"listings": len(stale), "snapshots": pruned}

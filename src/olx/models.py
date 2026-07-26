@@ -48,6 +48,9 @@ class Listing:
     category_id: int | None
     seller_id: int | None
     seller_name: str
+    # Первая ссылка остаётся отдельным полем для обратной совместимости с БД,
+    # полный набор нужен для альбома в Telegram.
+    photo_urls: tuple[str, ...] = ()
 
     @property
     def is_active(self) -> bool:

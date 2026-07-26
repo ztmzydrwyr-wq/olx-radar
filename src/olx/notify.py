@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import html
+import json
 import re
+from datetime import UTC, datetime
 from html.parser import HTMLParser
 from typing import Literal
 
@@ -18,6 +20,7 @@ REQUEST_TIMEOUT = 30.0
 # Подпись под фото в Telegram ограничена 1024 символами, и превышение -- это отказ
 # всего sendPhoto, а не обрезка. Остальное в подписи занимает ~250, берём запас.
 DESCRIPTION_LIMIT = 600
+MEDIA_GROUP_LIMIT = 10
 
 _BR_TAG = re.compile(r"<br\s*/?>\s*", re.IGNORECASE)
 
@@ -75,7 +78,46 @@ def _short_description(text: str) -> str:
     return (cut[:space] if space > DESCRIPTION_LIMIT // 2 else cut).rstrip(" ,.;:-") + "…"
 
 
-def _caption(listing: Listing, watch: Watch, *, reason: Literal["new", "pushup"]) -> str:
+def _age(moment: datetime, *, now: datetime | None = None) -> str:
+    now = now or datetime.now(UTC)
+    seconds = (now - moment).total_seconds()
+    minutes = int(seconds // 60)
+    if minutes < 1:
+        return "только что"
+    if minutes < 60:
+        return f"{minutes} мин назад"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours} ч назад"
+    days = hours // 24
+    if days < 30:
+        return f"{days} дн назад"
+    return f"{days // 30} мес назад"
+
+
+def _when_lines(
+    listing: Listing, reason: Literal["new", "pushup", "discovered"], *, now: datetime | None = None
+) -> list[str]:
+    """Строки о времени. Для поднятых и «впервые в выдаче» старая дата публикации
+    сама по себе сбивает с толку, поэтому явно помечаем её как дату публикации и
+    отдельной строкой показываем, когда объявление всплыло."""
+    if reason == "new":
+        return [f"🕐 {listing.created_at:%d.%m %H:%M} · {_age(listing.created_at, now=now)}"]
+
+    age = _age(listing.created_at, now=now)
+    lines = [f"🕐 опубликовано {listing.created_at:%d.%m.%Y} · {age}"]
+    resurfaced = listing.pushed_at or listing.refreshed_at
+    if reason == "pushup" and listing.pushed_at is not None:
+        when = listing.pushed_at
+        lines.append(f"🔄 поднято {when:%d.%m %H:%M} · {_age(when, now=now)}")
+    elif reason == "discovered" and resurfaced is not None and resurfaced > listing.created_at:
+        lines.append(f"↑ снова в выдаче {resurfaced:%d.%m %H:%M} · {_age(resurfaced, now=now)}")
+    return lines
+
+
+def _caption(
+    listing: Listing, watch: Watch, *, reason: Literal["new", "pushup", "discovered"]
+) -> str:
     # title/city/query/description приходят с OLX или введены владельцем в боте --
     # не наша разметка, экранируем перед вставкой в текст с parse_mode=HTML.
     title = html.escape(listing.title)
@@ -83,7 +125,11 @@ def _caption(listing: Listing, watch: Watch, *, reason: Literal["new", "pushup"]
     query = html.escape(watch.query)
     # Один и тот же listing может прийти по нескольким watch (дедуп в contracts.md
     # намеренно попарный) -- без имени запроса непонятно, почему пришла карточка.
-    mark = "🔄 Переподнято" if reason == "pushup" else "🆕 Новое"
+    mark = {
+        "new": "🆕 Новое",
+        "pushup": "🔄 Переподнято",
+        "discovered": "👀 Впервые в выдаче",
+    }[reason]
 
     body = [
         f"{mark} · запрос «{query}»",
@@ -92,7 +138,7 @@ def _caption(listing: Listing, watch: Watch, *, reason: Literal["new", "pushup"]
         "",
         f"💰 {_price_line(listing)}",
         f"📍 {city}",
-        f"🕐 {listing.created_at:%d.%m.%Y %H:%M}",
+        *_when_lines(listing, reason),
     ]
     if listing.description.strip():
         body += ["", html.escape(_short_description(listing.description))]
@@ -101,11 +147,27 @@ def _caption(listing: Listing, watch: Watch, *, reason: Literal["new", "pushup"]
 
 
 async def _send_photo(
-    client: httpx.AsyncClient, chat_id: int, photo_url: str, caption: str
+    client: httpx.AsyncClient, chat_id: int, photo_url: str, caption: str | None = None
 ) -> bool:
+    data: dict[str, str | int] = {"chat_id": chat_id, "photo": photo_url}
+    if caption is not None:
+        data.update({"caption": caption, "parse_mode": "HTML"})
     response = await client.post(
         _api_url("sendPhoto"),
-        data={"chat_id": chat_id, "caption": caption, "parse_mode": "HTML", "photo": photo_url},
+        data=data,
+    )
+    return response.status_code == 200
+
+
+async def _send_media_group(
+    client: httpx.AsyncClient, chat_id: int, photo_urls: tuple[str, ...], caption: str | None
+) -> bool:
+    media: list[dict[str, str]] = [{"type": "photo", "media": url} for url in photo_urls]
+    if caption is not None:
+        media[0].update({"caption": caption, "parse_mode": "HTML"})
+    response = await client.post(
+        _api_url("sendMediaGroup"),
+        data={"chat_id": chat_id, "media": json.dumps(media, ensure_ascii=False)},
     )
     return response.status_code == 200
 
@@ -121,18 +183,43 @@ async def _send_message(client: httpx.AsyncClient, chat_id: int, text: str) -> N
         )
 
 
-async def send_listing(listing: Listing, watch: Watch, *, reason: Literal["new", "pushup"]) -> None:
+async def send_listing(
+    listing: Listing, watch: Watch, *, reason: Literal["new", "pushup", "discovered"]
+) -> None:
     caption = _caption(listing, watch, reason=reason)
     chat_id = settings.telegram_owner_id
+    photo_urls = listing.photo_urls or (
+        (listing.photo_url,) if listing.photo_url is not None else ()
+    )
 
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-        if listing.photo_url is not None:
-            if await _send_photo(client, chat_id, listing.photo_url, caption):
+        if len(photo_urls) == 1:
+            if await _send_photo(client, chat_id, photo_urls[0], caption):
                 return
             # Ссылка на фото -- шаблон, подставленный в parse.py (контракты, п.1.2).
             # OLX может сменить его формат или файл может исчезнуть -- само
             # уведомление из-за этого теряться не должно.
             logger.warning(f"sendPhoto для {listing.id} отклонён Telegram, фоллбэк на sendMessage")
+        elif len(photo_urls) > 1:
+            caption_sent = False
+            for start in range(0, len(photo_urls), MEDIA_GROUP_LIMIT):
+                group = photo_urls[start : start + MEDIA_GROUP_LIMIT]
+                group_caption = None if caption_sent else caption
+                if await _send_media_group(client, chat_id, group, group_caption):
+                    caption_sent = caption_sent or group_caption is not None
+                    continue
+
+                logger.warning(
+                    "sendMediaGroup для {} отклонён Telegram, отправляю фото по одному", listing.id
+                )
+                for photo_url in group:
+                    photo_caption = None if caption_sent else caption
+                    if await _send_photo(client, chat_id, photo_url, photo_caption):
+                        caption_sent = caption_sent or photo_caption is not None
+                    else:
+                        logger.warning("sendPhoto для {} отклонён Telegram", listing.id)
+            if caption_sent:
+                return
         await _send_message(client, chat_id, caption)
 
 
