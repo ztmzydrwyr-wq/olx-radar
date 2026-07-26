@@ -150,6 +150,9 @@ async def test_failed_send_does_not_kill_cycle_and_keeps_listing_unseen(
 
     fresh = json.loads(json.dumps(sample["data"][0]))
     fresh["id"] = 777_000_001
+    # Опубликовано после создания запроса -- иначе это не «новое», а старое всплывшее,
+    # которое мы намеренно не шлём.
+    fresh["created_time"] = (datetime.now(UTC) + timedelta(minutes=1)).isoformat()
     monkeypatch.setattr(
         monitor.api, "search_raw", lambda *a, **kw: {**sample, "data": [fresh, *sample["data"]]}
     )

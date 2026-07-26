@@ -154,18 +154,6 @@ def test_when_lines_new_is_single_recent_line():
     assert "опубликовано" not in lines[0]
 
 
-def test_when_lines_discovered_labels_old_publish_date_and_resurface():
-    # Ровно случай владельца: айфон, созданный 130 дней назад, всплывший сегодня.
-    lst = _listing(
-        created_at=FIXED_NOW - timedelta(days=130),
-        refreshed_at=FIXED_NOW - timedelta(hours=6),
-        pushed_at=None,
-    )
-    lines = notify._when_lines(lst, "discovered", now=FIXED_NOW)
-    assert any("опубликовано" in ln and "4 мес назад" in ln for ln in lines)
-    assert any("снова в выдаче" in ln for ln in lines)
-
-
 def test_when_lines_pushup_shows_pushup_moment():
     lst = _listing(
         created_at=FIXED_NOW - timedelta(days=130),
@@ -176,15 +164,15 @@ def test_when_lines_pushup_shows_pushup_moment():
     assert any("поднято" in ln and "1 ч назад" in ln for ln in lines)
 
 
-def test_caption_discovered_marks_and_explains_old_date():
+def test_caption_pushup_marks_and_explains_old_date():
     lst = _listing(
         created_at=datetime.now(UTC) - timedelta(days=130),
-        refreshed_at=datetime.now(UTC) - timedelta(hours=3),
+        pushed_at=datetime.now(UTC) - timedelta(hours=3),
     )
-    caption = notify._caption(lst, _watch(), reason="discovered")
-    assert "Впервые в выдаче" in caption
+    caption = notify._caption(lst, _watch(), reason="pushup")
+    assert "Переподнято" in caption
     assert "опубликовано" in caption
-    assert "снова в выдаче" in caption
+    assert "поднято" in caption
 
 
 def _capture(monkeypatch):

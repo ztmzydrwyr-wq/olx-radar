@@ -175,7 +175,8 @@ async def test_only_listings_added_after_seeding_are_notified(
 
     fresh = json.loads(json.dumps(sample_response["data"][0]))
     fresh["id"] = 999_000_001
-    fresh["created_time"] = "2026-07-22T12:00:00+03:00"
+    # Опубликовано после создания запроса -- значит, по-настоящему новое.
+    fresh["created_time"] = (datetime.now(UTC) + timedelta(minutes=1)).isoformat()
     responses.append({**sample_response, "data": [fresh, *sample_response["data"]]})
 
     _make_due(watch.id)

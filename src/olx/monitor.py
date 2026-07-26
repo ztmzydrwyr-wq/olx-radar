@@ -14,7 +14,7 @@ from olx.errors import BlockedError, SchemaError, StorageError, TransportError
 from olx.models import Listing, NotifyMode, PollMode, Watch
 from olx.parse import apply_stop_words, matches_filters, parse_listing
 
-Reason = Literal["new", "pushup", "discovered"]
+Reason = Literal["new", "pushup"]
 
 NOTIFY_DELAY_SECONDS = 1.0
 TRANSPORT_ALERT_AFTER = 3
@@ -37,10 +37,13 @@ def select_new_from(
 
     for listing in listings:
         if listing.id not in seen:
-            # Старая карточка может появиться в выдаче не сразу из-за ранжирования
-            # OLX. Это не новое объявление, а первое появление в этой выдаче.
-            is_new = watch.created_at is None or listing.created_at >= watch.created_at
-            finds.append(Find(listing, "new" if is_new else "discovered"))
+            # Уведомляем только о том, что опубликовано ПОСЛЕ создания запроса.
+            # Старое объявление, впервые попавшее в выдачу (создано раньше запроса),
+            # не шлём: запрос следит за появившимся с момента его создания, а не за
+            # всем, что мы прежде не видели. Молча запомнится через mark_seen в
+            # poll_once, так что позднейший подъём в режиме new_pushup всё равно дойдёт.
+            if watch.created_at is None or listing.created_at >= watch.created_at:
+                finds.append(Find(listing, "new"))
             continue
 
         if watch.notify_mode is not NotifyMode.NEW_PUSHUP:

@@ -44,9 +44,10 @@ def test_unseen_listing_is_new_in_both_modes():
         assert [(f.listing.id, f.reason) for f in finds] == [(100, "new")]
 
 
-def test_old_listing_new_to_us_is_discovered_not_new():
-    # Ровно жалоба владельца: айфон, созданный задолго до запроса, впервые попал
-    # в выдачу. Он не «новый», он «впервые в выдаче» -- маркер должен это отражать.
+def test_old_listing_surfacing_is_not_notified():
+    # Требование владельца: старое объявление, впервые попавшее в выдачу, но
+    # созданное ДО запроса, уведомлением не считается. Уведомляем только то, что
+    # опубликовано после создания запроса.
     watch = Watch(
         id=1,
         query="iphone 13",
@@ -58,8 +59,23 @@ def test_old_listing_new_to_us_is_discovered_not_new():
     fresh = _listing(200, created=T0 + timedelta(hours=1))
 
     finds = select_new_from(watch, [old, fresh], seen=set(), last_pushups={})
-    by_id = {f.listing.id: f.reason for f in finds}
-    assert by_id == {100: "discovered", 200: "new"}
+    assert [(f.listing.id, f.reason) for f in finds] == [(200, "new")]
+
+
+def test_old_listing_pushed_after_watch_notifies_as_pushup():
+    # Но если старое объявление ПОДНЯЛИ уже после создания запроса -- это событие
+    # «с того момента, как создалась задача», его шлём (в режиме new_pushup).
+    watch = Watch(
+        id=1,
+        query="iphone 13",
+        filters=Filters(),
+        notify_mode=NotifyMode.NEW_PUSHUP,
+        created_at=T0,
+    )
+    old = _listing(100, created=T0 - timedelta(days=130), pushed=T0 + timedelta(hours=2))
+
+    finds = select_new_from(watch, [old], seen={100}, last_pushups={100: T0})
+    assert [(f.listing.id, f.reason) for f in finds] == [(100, "pushup")]
 
 
 def test_seen_listing_is_silent_without_pushup():

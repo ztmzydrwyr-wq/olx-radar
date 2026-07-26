@@ -96,28 +96,23 @@ def _age(moment: datetime, *, now: datetime | None = None) -> str:
 
 
 def _when_lines(
-    listing: Listing, reason: Literal["new", "pushup", "discovered"], *, now: datetime | None = None
+    listing: Listing, reason: Literal["new", "pushup"], *, now: datetime | None = None
 ) -> list[str]:
-    """Строки о времени. Для поднятых и «впервые в выдаче» старая дата публикации
-    сама по себе сбивает с толку, поэтому явно помечаем её как дату публикации и
-    отдельной строкой показываем, когда объявление всплыло."""
+    """Строки о времени. У поднятого объявления дата публикации старая и сама по себе
+    сбивает с толку, поэтому помечаем её как дату публикации и отдельной строкой
+    показываем момент подъёма."""
     if reason == "new":
         return [f"🕐 {listing.created_at:%d.%m %H:%M} · {_age(listing.created_at, now=now)}"]
 
     age = _age(listing.created_at, now=now)
     lines = [f"🕐 опубликовано {listing.created_at:%d.%m.%Y} · {age}"]
-    resurfaced = listing.pushed_at or listing.refreshed_at
-    if reason == "pushup" and listing.pushed_at is not None:
+    if listing.pushed_at is not None:
         when = listing.pushed_at
         lines.append(f"🔄 поднято {when:%d.%m %H:%M} · {_age(when, now=now)}")
-    elif reason == "discovered" and resurfaced is not None and resurfaced > listing.created_at:
-        lines.append(f"↑ снова в выдаче {resurfaced:%d.%m %H:%M} · {_age(resurfaced, now=now)}")
     return lines
 
 
-def _caption(
-    listing: Listing, watch: Watch, *, reason: Literal["new", "pushup", "discovered"]
-) -> str:
+def _caption(listing: Listing, watch: Watch, *, reason: Literal["new", "pushup"]) -> str:
     # title/city/query/description приходят с OLX или введены владельцем в боте --
     # не наша разметка, экранируем перед вставкой в текст с parse_mode=HTML.
     title = html.escape(listing.title)
@@ -125,11 +120,7 @@ def _caption(
     query = html.escape(watch.query)
     # Один и тот же listing может прийти по нескольким watch (дедуп в contracts.md
     # намеренно попарный) -- без имени запроса непонятно, почему пришла карточка.
-    mark = {
-        "new": "🆕 Новое",
-        "pushup": "🔄 Переподнято",
-        "discovered": "👀 Впервые в выдаче",
-    }[reason]
+    mark = {"new": "🆕 Новое", "pushup": "🔄 Переподнято"}[reason]
 
     body = [
         f"{mark} · запрос «{query}»",
@@ -184,7 +175,7 @@ async def _send_message(client: httpx.AsyncClient, chat_id: int, text: str) -> N
 
 
 async def send_listing(
-    listing: Listing, watch: Watch, *, reason: Literal["new", "pushup", "discovered"]
+    listing: Listing, watch: Watch, *, reason: Literal["new", "pushup"]
 ) -> None:
     caption = _caption(listing, watch, reason=reason)
     chat_id = settings.telegram_owner_id
