@@ -16,10 +16,8 @@ def pytest_collection_modifyitems(config, items):
     if os.environ.get(LIVE_ENV) == "1":
         return
 
-    # По умолчанию живые тесты пропускаются. Причины разные, обе весомые:
-    # telegram-тесты при каждом прогоне засыпали владельцу чат тестовыми карточками,
-    # а network-тесты дёргают olx.ua — набор гоняется десятки раз в день, и это
-    # уже не «бытовой профиль нагрузки» из R-1.
+    # Живые тесты по умолчанию пропускаем: telegram-тесты слали владельцу карточки при
+    # каждом прогоне, а network-тесты набирают десятки обращений к olx.ua в день (R-1).
     skip = pytest.mark.skip(reason=f"живой тест; включить: {LIVE_ENV}=1")
     for item in items:
         if "telegram" in item.keywords or "network" in item.keywords:

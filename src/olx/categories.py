@@ -11,9 +11,8 @@ TREE_PATH = Path(__file__).resolve().parents[2] / "data" / "reference" / "olx-ca
 
 @lru_cache(maxsize=1)
 def _tree() -> dict[int, dict]:
-    # /list и /export зовут label() на каждый запрос -- без этой проверки владелец
-    # получил бы голый FileNotFoundError из недр pathlib вместо понятной причины
-    # и команды на исправление.
+    # Внятная причина вместо голого FileNotFoundError: label() зовётся из /list и
+    # /export, а справочник может не доехать при клоне без data/reference.
     if not TREE_PATH.exists():
         raise ConfigError(
             f"Справочник категорий не найден: {TREE_PATH}. "

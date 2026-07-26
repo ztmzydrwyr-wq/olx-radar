@@ -52,15 +52,6 @@ def test_wizard_step_totals_cover_the_optional_category_step():
     assert "Шаг 8 из 8" in texts.step(8, 8, "Уведомления", "тело")
 
 
-# --- /resume: не поднимать сломанные SchemaError запросы молча (T-27) --------
-#
-# Схема watches не различает «на паузе по воле владельца» и «остановлен монитором
-# из-за SchemaError» -- обе дают enabled=0, и storage.py трогать здесь нельзя.
-# Вместо чтения причины из БД /resume перепроверяет каждый приостановленный запрос
-# живым вызовом api.search_raw + parse_search_response -- тем же способом, каким
-# монитор и находит поломку формата.
-
-
 class _FakeMessage:
     def __init__(self):
         self.sent: list[str] = []
@@ -117,9 +108,8 @@ async def test_resume_keeps_a_schema_broken_watch_paused_and_warns(db, monkeypat
 
 @pytest.mark.asyncio
 async def test_resume_does_not_block_on_a_transient_network_failure(db, monkeypatch):
-    # Сбой сети/блокировка при проверке -- не то же самое, что поломка формата.
-    # /resume не должен держать честно приостановленный владельцем запрос из-за
-    # того, что OLX именно сейчас недоступен.
+    # Сбой сети при проверке -- не поломка формата: честно приостановленный запрос
+    # не должен застрять из-за того, что OLX именно сейчас недоступен.
     watch = storage.add_watch("q", Filters(), PollMode.FAST, NotifyMode.NEW)
     storage.update_watch(watch.id, enabled=False)
 

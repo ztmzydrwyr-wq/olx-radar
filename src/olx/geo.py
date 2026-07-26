@@ -51,13 +51,9 @@ def find_cities(text: str, *, limit: int = 8) -> list[tuple[int, str]]:
             contains.append((city["id"], name))
     return (sorted(starts, key=lambda c: c[1]) + sorted(contains, key=lambda c: c[1]))[:limit]
 
-# Справочника городов у OLX нет: в реестре фильтров его не оказалось (S-05), а
-# geo-encoder и соседние эндпоинты отвечают общей 404-заглушкой на любую форму вызова.
-# Поэтому города берём из самой выдачи: так в списке оказываются только те, где
-# искомое действительно есть, и справочник не нужно ни хранить, ни поддерживать.
-
-
 def cities_from_raw(raw_items: list[dict], *, limit: int = 8) -> list[tuple[int, str, int]]:
+    # Города из выдачи, а не из справочника: geo-encoder и соседние эндпоинты отвечают
+    # общей 404-заглушкой (S-05). Зато так в списке только те, где искомое есть.
     counts: Counter[tuple[int, str]] = Counter()
     for item in raw_items:
         city = (item.get("location") or {}).get("city") or {}
@@ -73,12 +69,10 @@ ALWAYS_KEEP = 3
 
 
 def categories_from_raw(raw_items: list[dict], *, limit: int = 6) -> list[tuple[int, str, str]]:
-    """(category_id, тип, пример заголовка) — по убыванию частоты в выдаче.
+    """Разделы, встретившиеся в выдаче, по убыванию частоты: (id, тип, пример заголовка).
 
-    Названий категорий OLX не отдаёт нигде: `/api/v1/categories/` и
-    `/offers/metadata/categories/` дают 404, а реестр фильтров возвращает один и тот же
-    глобальный список независимо от `category_id`. Поэтому подписываем кнопку примером
-    объявления — «Продаж…» и «Оренда…» различаются на глаз, а `type` даёт грубую группу.
+    Из выдачи, а не из справочника: списка категорий OLX через API не отдаёт (S-05);
+    названия подставляет дерево из categories.py.
     """
     counts: Counter[tuple[int, str]] = Counter()
     examples: dict[int, str] = {}
@@ -92,10 +86,9 @@ def categories_from_raw(raw_items: list[dict], *, limit: int = 6) -> list[tuple[
 
     total = sum(counts.values())
     ranked = counts.most_common(limit)
-    # Единичные попадания -- шум: по «Квартира» в выдачу затесались «Інші послуги»
-    # с одним объявлением. Предлагать их наравне с арендой значит топить нужное
-    # в случайном. Первые три оставляем всегда: иначе на узком запросе,
-    # где всё размазано по чуть-чуть, список окажется пустым.
+    # Единичные попадания -- шум (по «Квартира» затесались «Інші послуги» с одним
+    # объявлением). Но первые три оставляем всегда: на узком запросе, где всё размазано
+    # по чуть-чуть, порог обнулил бы список.
     kept = [
         (cid, ctype, examples.get(cid, ""))
         for i, ((cid, ctype), n) in enumerate(ranked)

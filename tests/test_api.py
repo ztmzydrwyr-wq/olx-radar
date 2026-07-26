@@ -65,9 +65,8 @@ def test_search_raw_applies_all_filters_ac2():
         assert PRICE_FROM <= price <= PRICE_TO
         assert offer["location"]["city"]["id"] == KYIV_CITY_ID
         assert state == "used"
-        # Строго для КАЖДОГО объявления, не для большинства: сломанный
-        # private_business даёт business==False только у 43/52 (S-05), а не 52/52.
-        # Эта проверка обязана упасть, если owner_type подменить на private_business.
+        # Для КАЖДОГО объявления, не для большинства: private_business «фильтрует»
+        # 43/52, owner_type -- 52/52 (S-05). Подмена одного на другой обязана уронить тест.
         assert offer["business"] is False
 
 
