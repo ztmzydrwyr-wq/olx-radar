@@ -37,6 +37,13 @@ def test_build_search_url_maps_all_filters():
     assert "private_business" not in qs
 
 
+def test_search_url_sorts_by_newest():
+    # Без сортировки свежее объявление попадает на первую страницу через 5-17 мин
+    # (S-08, замер по проду) и AC-4 проваливается. created_at:desc -- условие скорости.
+    qs = parse_qs(urlparse(build_search_url(QUERY, Filters())).query)
+    assert qs["sort_by"] == ["created_at:desc"]
+
+
 def _param(offer: dict, key: str) -> dict | None:
     for p in offer["params"]:
         if p["key"] == key:

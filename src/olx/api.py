@@ -12,7 +12,18 @@ BASE_URL = "https://www.olx.ua/api/v1/offers/"
 
 
 def build_search_url(query: str, filters: Filters, *, offset: int = 0, limit: int = 40) -> str:
-    params: dict[str, str | int] = {"offset": offset, "limit": limit, "query": query}
+    # sort_by=created_at:desc обязателен для скорости реакции (AC-4). Без сортировки
+    # выдача идёт по релевантности, и свежее объявление попадает на первую страницу
+    # только через 5-17 минут (замер по проду: медиана 14 мин, 0/8 в срок). С этой
+    # сортировкой недавние объявления оказываются в топе выдачи сразу. Продвинутые
+    # объявления OLX всё равно закрепляет сверху, но органика свежих 20 минут входит
+    # в первые 40 позиций, которые читает быстрый режим.
+    params: dict[str, str | int] = {
+        "offset": offset,
+        "limit": limit,
+        "query": query,
+        "sort_by": "created_at:desc",
+    }
     if filters.price_from is not None:
         params["filter_float_price:from"] = filters.price_from
     if filters.price_to is not None:
