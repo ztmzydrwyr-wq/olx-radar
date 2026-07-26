@@ -22,6 +22,10 @@ REQUEST_TIMEOUT = 30.0
 DESCRIPTION_LIMIT = 600
 MEDIA_GROUP_LIMIT = 10
 
+# Свежее объявление доходит за ~15-30 мин (лаг платформы + опрос). Больший разрыв
+# значит, что в выдачу оно вошло позже публикации -- обычно после смены цены.
+LATE_DETECTION_SECONDS = 3 * 3600
+
 _BR_TAG = re.compile(r"<br\s*/?>\s*", re.IGNORECASE)
 
 
@@ -78,31 +82,38 @@ def _short_description(text: str) -> str:
     return (cut[:space] if space > DESCRIPTION_LIMIT // 2 else cut).rstrip(" ,.;:-") + "…"
 
 
+def _humanize(seconds: float) -> str:
+    minutes = int(seconds // 60)
+    if minutes < 1:
+        return "меньше минуты"
+    if minutes < 60:
+        return f"{minutes} мин"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours} ч"
+    days = hours // 24
+    return f"{days} дн" if days < 30 else f"{days // 30} мес"
+
+
 def _age(moment: datetime, *, now: datetime | None = None) -> str:
     now = now or datetime.now(UTC)
     seconds = (now - moment).total_seconds()
-    minutes = int(seconds // 60)
-    if minutes < 1:
-        return "только что"
-    if minutes < 60:
-        return f"{minutes} мин назад"
-    hours = minutes // 60
-    if hours < 24:
-        return f"{hours} ч назад"
-    days = hours // 24
-    if days < 30:
-        return f"{days} дн назад"
-    return f"{days // 30} мес назад"
+    return "только что" if seconds < 60 else f"{_humanize(seconds)} назад"
 
 
 def _when_lines(
     listing: Listing, reason: Literal["new", "pushup"], *, now: datetime | None = None
 ) -> list[str]:
-    """Строки о времени. У поднятого объявления дата публикации старая и сама по себе
-    сбивает с толку, поэтому помечаем её как дату публикации и отдельной строкой
-    показываем момент подъёма."""
+    now = now or datetime.now(UTC)
     if reason == "new":
-        return [f"🕐 {listing.created_at:%d.%m %H:%M} · {_age(listing.created_at, now=now)}"]
+        gap = (now - listing.created_at).total_seconds()
+        if gap <= LATE_DETECTION_SECONDS:
+            return [f"🕐 {listing.created_at:%d.%m %H:%M} · {_age(listing.created_at, now=now)}"]
+        # Опубликовано давно, а в выдачу вошло только сейчас -- обычно из-за смены цены.
+        return [
+            f"🕐 опубликовано {listing.created_at:%d.%m %H:%M}",
+            f"👀 замечено спустя {_humanize(gap)} после публикации — возможно, изменилась цена",
+        ]
 
     age = _age(listing.created_at, now=now)
     lines = [f"🕐 опубликовано {listing.created_at:%d.%m.%Y} · {age}"]

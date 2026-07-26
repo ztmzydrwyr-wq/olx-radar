@@ -154,6 +154,14 @@ def test_when_lines_new_is_single_recent_line():
     assert "опубликовано" not in lines[0]
 
 
+def test_when_lines_new_but_late_explains_the_gap():
+    # Ровно случай владельца: опубликовано 2 дня назад, замечено только сейчас.
+    lst = _listing(created_at=FIXED_NOW - timedelta(days=2))
+    lines = notify._when_lines(lst, "new", now=FIXED_NOW)
+    assert any("опубликовано" in ln for ln in lines)
+    assert any("замечено спустя 2 дн" in ln and "изменилась цена" in ln for ln in lines)
+
+
 def test_when_lines_pushup_shows_pushup_moment():
     lst = _listing(
         created_at=FIXED_NOW - timedelta(days=130),
