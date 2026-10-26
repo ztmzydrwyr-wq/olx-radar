@@ -696,10 +696,12 @@ async def export_send(call: CallbackQuery) -> None:
     await call.answer()
 
 
-async def build_dispatcher () -> Dispatch
-dp = Dispatcher ()
-dp. update.outer_middleware (Own dp. include_router(router)
-return 
+
+ def build_dispatcher() -> Dispatcher:
+    dp = Dispatcher()
+    dp.update.outer_middleware(OwnerOnly())
+    dp.include_router(router)
+    return dp
         
 
         if user is None or user.id not in allowed_ids:
