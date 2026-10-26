@@ -695,20 +695,16 @@ async def export_send(call: CallbackQuery) -> None:
     await call.message.answer_document(FSInputFile(path))
     await call.answer()
 
-
-
- def build_dispatcher() -> Dispatcher:
+    def build_dispatcher() -> Dispatcher:
     dp = Dispatcher()
     dp.update.outer_middleware(OwnerOnly())
     dp.include_router(router)
     return dp
-        
 
         if user is None or user.id not in allowed_ids:
             return None
 
         return await handler(event, data)
-
 
 async def run_bot() -> None:
     bot = Bot(
