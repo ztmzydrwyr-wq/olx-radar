@@ -696,13 +696,11 @@ async def export_send(call: CallbackQuery) -> None:
     await call.answer()
 
 
-class OwnerOnly(BaseMiddleware):
-    async def __call__(self, handler, event, data):
-        user = data.get("event_from_user")
-        allowed_ids = {
-            settings.telegram_owner_id,
-            7865195788,
-        }
+async def build_dispatcher () -> Dispatch
+dp = Dispatcher ()
+dp. update.outer_middleware (Own dp. include_router(router)
+return 
+        
 
         if user is None or user.id not in allowed_ids:
             return None
